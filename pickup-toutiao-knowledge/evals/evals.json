@@ -1,0 +1,42 @@
+{
+  "skill_name": "pickup-toutiao-knowledge",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我把这篇今日头条文章保存下来：https://www.toutiao.com/article/7667029267172655626/?log_from=d0ebf2511a3d18_1785163614629",
+      "expected_output": "A markdown file named after the article title, with article content and locally downloaded images in an images/ folder.",
+      "files": [],
+      "expectations": [
+        "A .md file is created with the article title as filename",
+        "The .md file contains article body content in Markdown format",
+        "Images are downloaded to a local images/ directory",
+        "The .md file references images with relative local paths",
+        "No original Toutiao CDN image URLs remain in the markdown body"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "保存这篇文章 https://www.toutiao.com/article/7667029267172655626/ 到 ~/Downloads/toutiao/ 目录下",
+      "expected_output": "A markdown file saved to ~/Downloads/toutiao/ with title as filename, plus an images/ subdirectory with downloaded images.",
+      "files": [],
+      "expectations": [
+        "Output is saved to the user-specified directory (~/Downloads/toutiao/)",
+        "A .md file exists in that directory with proper naming",
+        "Images are saved to ~/Downloads/toutiao/images/",
+        "The .md file contains properly formatted article content"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I want to download this toutiao article and save it as markdown: https://www.toutiao.com/article/7667029267172655626/",
+      "expected_output": "A clean markdown file from the toutiao article with embedded images saved locally.",
+      "files": [],
+      "expectations": [
+        "A .md file is generated with the article's title",
+        "Article content is properly converted from HTML to Markdown",
+        "Images from the article are downloaded alongside the .md file",
+        "The process is automated via the skill's bundled Python script"
+      ]
+    }
+  ]
+}
