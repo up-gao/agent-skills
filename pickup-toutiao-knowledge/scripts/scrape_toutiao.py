@@ -551,8 +551,14 @@ def _ext_from_content_type(content_type: str) -> str:
 
 def _download_image(url: str, image_dir: Path, seen: dict[str, str]) -> str:
     """Download image and return relative path for the Markdown file.
+
+    Retries on transient failures (timeout, connection errors) up to 3 times
+    with increasing backoff. Uses a longer timeout for image downloads since
+    Toutiao CDN servers can be slow.
+
     seen is a dict mapping URL → assigned filename (for dedup).
-    Detects the real file extension from the HTTP Content-Type header."""
+    Detects the real file extension from the HTTP Content-Type header.
+    """
     # Skip data: URIs — they are inline and don't need downloading
     if url.startswith("data:"):
         return url
@@ -569,40 +575,53 @@ def _download_image(url: str, image_dir: Path, seen: dict[str, str]) -> str:
 
     real_ext = ""
 
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True)
-        resp.raise_for_status()
+    # Retry up to 3 times for transient failures, doubling timeout each attempt
+    max_retries = 3
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            # Start at 30s, double each retry: 30 → 60 → 120
+            timeout = REQUEST_TIMEOUT * (2 ** attempt)
+            resp = requests.get(url, headers=HEADERS, timeout=timeout, stream=True)
+            resp.raise_for_status()
 
-        # Detect extension from Content-Type header
-        real_ext = _ext_from_content_type(resp.headers.get("Content-Type", ""))
+            # Detect extension from Content-Type header
+            real_ext = _ext_from_content_type(resp.headers.get("Content-Type", ""))
 
-        with open(tmp_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
 
-        # Fallback: detect from magic bytes if Content-Type didn't help
-        if not real_ext:
-            real_ext = _ext_from_magic(tmp_path)
+            # Fallback: detect from magic bytes if Content-Type didn't help
+            if not real_ext:
+                real_ext = _ext_from_magic(tmp_path)
 
-        # Last resort
-        if not real_ext:
-            real_ext = ".png"
+            # Last resort
+            if not real_ext:
+                real_ext = ".png"
 
-        # Rename to final name with correct extension
-        final_name = base_name + real_ext
-        final_path = image_dir / final_name
-        tmp_path.rename(final_path)
+            # Rename to final name with correct extension
+            final_name = base_name + real_ext
+            final_path = image_dir / final_name
+            tmp_path.rename(final_path)
 
-        seen[url] = final_name
-        print(f"  ✓ Downloaded: {final_name}")
-        return f"{IMAGE_DIR_NAME}/{final_name}"
+            seen[url] = final_name
+            print(f"  ✓ Downloaded: {final_name}")
+            return f"{IMAGE_DIR_NAME}/{final_name}"
 
-    except Exception as e:
-        print(f"  ✗ Failed to download {url}: {e}")
-        # Clean up temp file if it exists
-        if tmp_path.exists():
-            tmp_path.unlink()
-        return url
+        except Exception as e:
+            last_error = e
+            # Clean up temp file if it exists
+            if tmp_path.exists():
+                tmp_path.unlink()
+            if attempt < max_retries - 1:
+                delay = 2 ** attempt  # 1s, 2s, then 4s before retry
+                print(f"  ⚠ Retry {attempt + 1}/{max_retries - 1} (waiting {delay}s): {url[:80]}...")
+                time.sleep(delay)
+
+    # All retries exhausted — return the original URL as final fallback
+    print(f"  ✗ Failed after {max_retries} attempts: {url[:80]}... → {last_error}")
+    return url
 
 
 def _ext_from_magic(filepath: Path) -> str:

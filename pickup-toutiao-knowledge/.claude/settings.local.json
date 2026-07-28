@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.toutiao.com)",
+      "Bash(pip install *)",
+      "Bash(curl *)",
+      "Read(//private/tmp/**)",
+      "Bash(python /Users/gaofeng/wk/claude-wk/pickup-toutiao-knowledge/scripts/scrape_toutiao.py \"https://www.toutiao.com/article/7667029267172655626/\" ~/Downloads/toutiao/)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(grep -oP '.{0,100}SSR.{0,100}' /Users/gaofeng/wk/claude-wk/pickup-toutiao-knowledge-workspace/iteration-1/eval-1/without_skill/outputs/toutiao_page.html)",
+      "Bash(playwright install *)",
+      "Read(//Users/gaofeng/Library/Caches/ms-playwright/**)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "codegraph"
+  ]
+}
