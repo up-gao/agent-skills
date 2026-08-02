@@ -1,5 +1,5 @@
 ---
-name: pickup-toutiao-knowledge
+name: fetch-toutiao-knowledge
 description: >
   抓取并保存今日头条文章为本地 Markdown 文件，包含图片下载。当用户提供头条文章链接时触发 —
   无论是说"保存这篇文章"、"下载头条文章"、"爬取这篇文章"、"保存今日头条文章"、

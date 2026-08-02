@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(curl -sL --max-time 15 -H 'Content-Type: application/json' https://api.juejin.cn/content_api/v1/article/detail -d '{\"article_id\":\"7449241643798724617\",\"cursor\":\"0\"}')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -sL --max-time 15 -H 'User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0.0.0 Safari/537.36' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: zh-CN,zh;q=0.9' https://juejin.cn/post/7449241643798724617)",
+      "WebFetch(domain:juejin.cn)",
+      "Bash(curl -sL --max-time 15 -H 'User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0.0.0 Safari/537.36' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: zh-CN,zh;q=0.9' https://juejin.cn/column/7003686944504774663)",
+      "Bash(curl -sL --max-time 15 -H 'User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0.0.0 Safari/537.36' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' -H 'Accept-Language: zh-CN,zh;q=0.9' https://juejin.cn/user/3793793900098220/posts)",
+      "Bash(curl -sL --max-time 30 -H 'Content-Type: application/json' 'https://api.juejin.cn/content_api/v1/article/detail?aid=2608&uuid=&spider=0' -d '{\"article_id\":\"7577653509862654002\",\"client_type\":2608}' -o /tmp/juejin_article.json)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 *)"
+    ]
+  }
+}
