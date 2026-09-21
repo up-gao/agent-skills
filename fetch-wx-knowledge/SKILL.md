@@ -73,10 +73,10 @@ python3 <skill-base>/scripts/wx_preprocess.py \
 
 ### Step 4: 转换为 Markdown
 
-复用 `fetch-knowledge` 技能的转换脚本：
+使用本技能自带的转换脚本：
 
 ```bash
-python3 <fetch-knowledge-base>/scripts/html_to_md.py \
+python3 <skill-base>/scripts/html_to_md.py \
   --input /tmp/wx_clean.html \
   --output <output-dir>/<slug>.md \
   --title "<标题>" \
@@ -84,7 +84,9 @@ python3 <fetch-knowledge-base>/scripts/html_to_md.py \
   --source-url "<原文URL>"
 ```
 
-> `<fetch-knowledge-base>` 路径：`/Users/gaofeng/.claude/skills/fetch-knowledge`
+> `<skill-base>` 路径：本技能目录（含 `SKILL.md` 的那层），例如 `skills/fetch-wx-knowledge`。
+> `scripts/html_to_md.py` 随技能一起分发，无需依赖外部 `fetch-knowledge`。
+> `--title` 可省略（脚本会回退到 HTML 里的 `<h1>`）。
 
 文件命名：用标题做 slug（小写、连字符、去特殊符号）。中文标题保留中文即可。
 
