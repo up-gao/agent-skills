@@ -45,7 +45,7 @@ images/                            ← 默认图片目录
 
 正文内容...
 
-![配图](/绝对路径/images/image-20260528104203839.jpeg)
+![配图](images/image-20260528104203839.jpeg)
 ```
 
 ---
@@ -153,4 +153,4 @@ https://mp.weixin.qq.com/s/yyyyy
 - **文件命名**：以文章标题作为文件名（保留中文，过长截断）
 - **原文链接**：每篇 Markdown 标题下方自动插入 `> 原文链接：...`
 - **图片命名**：`image-YYYYMMDDHHmmssSSS.ext`（时间戳，唯一且可排序）
-- **图片路径**：Markdown 中使用绝对路径，文件移动后图片不受影响
+- **图片路径**：Markdown 中使用**相对于 Markdown 文件的相对路径**（如 `images/image-xxx.png`），整个目录移动或分享后图片依然有效

@@ -5,14 +5,14 @@ description: >
   当用户提供微信公众号文章链接时，无论说的是"采集"、"下载"、"保存"、"提取"、"导出"、
   "转换"，还是"收藏公众号文章"、"把微信文章保存到本地"，都必须触发此技能。
   支持单篇文章采集、URL 列表批量采集、以及专栏/合集（mp.appmsgalbum）全部文章采集。
-  输出 Markdown 文件带原文链接、图片使用绝对路径、
+  输出 Markdown 文件带原文链接、图片使用相对于 Markdown 文件的相对路径、
   图片自动重命名为 image-YYYYMMDDHHmmssSSS.ext 格式（时间戳命名）。
   也适用于任何 mp.weixin.qq.com 域名的文章链接。
 ---
 
 # 微信公众号文章采集
 
-将微信公众号文章转换为本地 Markdown 文件，图片全部下载到本地，路径使用绝对路径。
+将微信公众号文章转换为本地 Markdown 文件，图片全部下载到本地，Markdown 中的图片链接使用**相对于 Markdown 文件的相对路径**（便于整个目录打包、移动、分享）。
 
 
 ## Step 0: 识别链接类型
@@ -159,13 +159,16 @@ with open('/tmp/wx_url_map.json', 'w') as f:
 - 下载时带上微信 Referer UA 避免被拦截
 - 时间戳 `YYYYMMDDHHmmss` + 3 位毫秒 = 17 位数字，如 `image-20260528104203839.png`
 
-### Step 6: 替换为绝对路径
+### Step 6: 替换为相对路径
+
+将图片链接改写为**相对于 Markdown 文件所在目录**的相对路径（例如 `images/image-20260528104203839.png`）。这样打包、移动或分享整个目录后图片仍然可用。
 
 ```python
 import re, json, os
 
 md_file = '<output>.md'
-static_dir = os.path.abspath('<图片目录>')
+static_dir = '<图片目录>'  # 相对或绝对均可
+md_dir = os.path.dirname(os.path.abspath(md_file))
 
 with open('/tmp/wx_url_map.json', 'r') as f:
     url_map = json.load(f)
@@ -177,8 +180,9 @@ def replace_img(match):
     alt = match.group(1)
     url = match.group(2)
     if url in url_map:
-        abs_path = os.path.join(static_dir, url_map[url])
-        return f'![{alt}]({abs_path})'
+        abs_path = os.path.abspath(os.path.join(static_dir, url_map[url]))
+        rel_path = os.path.relpath(abs_path, md_dir).replace(os.sep, '/')
+        return f'![{alt}]({rel_path})'
     if not url.startswith('http') and not url.startswith('/'):
         return match.group(0)
     print(f"WARNING: {url[:60]} not downloaded")
@@ -189,8 +193,13 @@ content = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', replace_img, content)
 with open(md_file, 'w') as f:
     f.write(content)
 
-print('Image paths → absolute paths done.')
+print('Image paths → relative paths done.')
 ```
+
+要点：
+- 用 `os.path.relpath(abs_path, md_dir)` 计算相对路径，再统一用 `/` 作分隔符（跨平台）
+- 默认图片目录为 `<output-dir>/images/`，此时链接形如 `images/image-xxx.png`
+- 若图片目录在 Markdown 文件同级或子目录下，相对路径最简单；若在上级目录会自动生成 `../` 前缀
 
 ### Step 7: 验证并报告
 
@@ -201,11 +210,16 @@ echo "图片引用: $(grep -c '!\[.*\](.*)' <output>.md)"
 echo "图片文件: $(ls <图片目录> | wc -l)"
 echo ""
 
-# 破损检查
+# 破损检查（相对路径相对于 Markdown 文件所在目录解析）
+md_dir=$(dirname "<output>.md")
 broken=0
 while IFS= read -r ref; do
   path=$(echo "$ref" | grep -oP '(?<=\().*(?=\))')
-  if [ ! -f "$path" ]; then echo "BROKEN: $ref"; ((broken++)); fi
+  case "$path" in
+    http*|/*) resolved="$path" ;;
+    *) resolved="$md_dir/$path" ;;
+  esac
+  if [ ! -f "$resolved" ]; then echo "BROKEN: $ref"; broken=$((broken+1)); fi
 done < <(grep -oP '!\[.*?\]\(([^)]+)\)' <output>.md)
 echo "破损: $broken"
 
@@ -217,8 +231,12 @@ rm -f /tmp/wx_page.html /tmp/wx_clean.html /tmp/wx_url_map.json
 - 文章标题
 - 输出文件路径和大小
 - 图片数量和总大小
-- 原文链接（已写在标题下方）
+- 原文链接（已写在标题下方，必须是浏览器可访问的 http(s) URL）
 - 任何失败的图片
+
+**原文链接要求**：`--source-url` 一律传公开可访问的文章 URL（`mp.weixin.qq.com/s/...`）。
+严禁把 `/tmp/wx_clean.html`、`<output>.md` 或任何本地文件路径写进「原文链接」。
+`html_to_md.py` 会在 `--source-url` 不是 `http(s)://` 时直接报错，避免这种错误落盘。
 
 ## 输出示例
 
@@ -236,8 +254,12 @@ rm -f /tmp/wx_page.html /tmp/wx_clean.html /tmp/wx_url_map.json
 
 正文内容...
 
-![图片描述](/绝对路径/images/image-20260528104203839.png)
+![图片描述](images/image-20260528104203839.png)
 ```
+
+> 「原文链接」始终是可在浏览器打开的公开 URL，而不是本地文件路径。
+
+> 图片路径相对于 Markdown 文件（如 `images/image-xxx.png`），整个目录移动或分享后图片依然有效。
 
 ## 微信文章特点
 
@@ -327,5 +349,5 @@ for i, article_url in enumerate(album['article_urls']):
 ## 依赖
 
 - `curl` — 抓取页面和图片
-- `python3` — 预处理和路径替换
-- `fetch-knowledge` skill 的 `html_to_md.py` — HTML 转 Markdown
+- `python3` — 预处理和相对路径替换
+- 本技能的 `scripts/html_to_md.py` — HTML 转 Markdown

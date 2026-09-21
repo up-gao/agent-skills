@@ -17,7 +17,12 @@ from html import unescape
 
 
 def preprocess(html, title_override=None):
-    """Pre-process WeChat article HTML. Returns (title, clean_html_fragment)."""
+    """Pre-process WeChat article HTML.
+
+    Returns (title, clean_html_fragment, meta) where meta holds:
+      author        — account nickname (var nickname), fallback to meta author
+      publish_time  — 'YYYY-MM-DD HH:MM' from var createTime
+    """
 
     # Step 1: Extract title
     title = title_override or ''
@@ -31,6 +36,17 @@ def preprocess(html, title_override=None):
             m = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
             if m and m.group(1).strip():
                 title = m.group(1).strip()
+
+    # Step 1b: Extract author and publish time (surfaced in the markdown header)
+    meta = {'author': '', 'publish_time': ''}
+    m = re.search(r'var\s+nickname\s*=\s*htmlDecode\("([^"]*)"\)', html)
+    if not m:
+        m = re.search(r'<meta\s[^>]*name="author"[^>]*content="([^"]*)"', html, re.I)
+    if m:
+        meta['author'] = unescape(m.group(1)).strip()
+    m = re.search(r"var\s+createTime\s*=\s*'([^']+)'", html)
+    if m:
+        meta['publish_time'] = m.group(1).strip()
 
     # Step 2: Extract main content
     # WeChat articles store content in these containers:
@@ -111,19 +127,57 @@ def preprocess(html, title_override=None):
     # Step 4: Remove inline scripts and styles
     content_html = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', content_html, flags=re.I | re.DOTALL)
 
+    # Step 4b: Strip WeChat trailing junk so it never reaches the markdown
+    #   - hidden helper tags such as <mp-style-type data-value="3"></mp-style-type>
+    #   - hidden UI text such as 预览时标签不可点
+    #   - the trailing rich_media_area_extra / tool / tag blocks at the end of the body
+    content_html = re.sub(r'<mp-[^>]*>.*?</mp-[^>]*>', '', content_html, flags=re.I | re.DOTALL)
+    content_html = re.sub(r'<mp-[^>]*/?>', '', content_html, flags=re.I)
+    content_html = re.sub(r'<div[^>]*id="js_tags_preview_toast"[^>]*>.*?</div>', '', content_html, flags=re.I | re.DOTALL)
+    content_html = re.sub(r'<div[^>]*rich_media_area_extra[^>]*>.*$', '', content_html, flags=re.I | re.DOTALL)
+    content_html = re.sub(r'<div[^>]*id="(content_bottom_area|font_pannel_area|js_temp_bottom_area)"[^>]*>.*$', '', content_html, flags=re.I | re.DOTALL)
+
+    # Step 4c: Rebuild code blocks line by line. WeChat splits code into a <code>
+    # element per line and uses &nbsp;/spans for indentation; joined naively the
+    # layout collapses. Emit one line per <code> with indentation preserved.
+    def fix_code_block(m):
+        pre_tag = m.group(1)
+        inner = m.group(2)
+        lang_m = re.search(r'data-lang="([^"]*)"', pre_tag, re.I)
+        lang = lang_m.group(1).strip() if lang_m else ''
+        lines = []
+        for line_html in re.findall(r'<code[^>]*>(.*?)</code>', inner, re.I | re.S):
+            line = re.sub(r'<br\s*/?>', '\n', line_html, flags=re.I)
+            line = re.sub(r'<[^>]+>', '', line)
+            line = unescape(line).replace('\xa0', ' ').replace('\u200b', '')
+            line = line.rstrip()
+            lines.append(line)
+        # Drop leading/trailing empty lines but keep internal blank lines
+        while lines and not lines[0]:
+            lines.pop(0)
+        while lines and not lines[-1]:
+            lines.pop()
+        code = '\n'.join(lines)
+        return f'<pre data-lang="{lang}"><code>{code}</code></pre>'
+
+    content_html = re.sub(
+        r'(<pre[^>]*>)(.*?)</pre>',
+        lambda m: fix_code_block(m),
+        content_html, flags=re.I | re.S)
+
     # Step 5: Build clean HTML document
     clean_html = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>{title}</title></head>
 <body>
-<article>
+<article data-author="{meta['author']}" data-publish-time="{meta['publish_time']}">
 <h1>{title}</h1>
 {content_html}
 </article>
 </body>
 </html>"""
 
-    return title, clean_html
+    return title, clean_html, meta
 
 
 def main():
@@ -136,12 +190,16 @@ def main():
     with open(args.input, 'r', encoding='utf-8') as f:
         html = f.read()
 
-    title, clean_html = preprocess(html, args.title)
+    title, clean_html, meta = preprocess(html, args.title)
 
     with open(args.output, 'w', encoding='utf-8') as f:
         f.write(clean_html)
 
     print(f'Title: {title}')
+    if meta.get('author'):
+        print(f'Author: {meta["author"]}')
+    if meta.get('publish_time'):
+        print(f'Publish time: {meta["publish_time"]}')
     print(f'Clean HTML: {len(clean_html)} chars')
     print(f'Output: {args.output}')
 
