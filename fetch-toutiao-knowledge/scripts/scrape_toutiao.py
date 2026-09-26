@@ -56,14 +56,29 @@ def clean_title(title: str) -> str:
 
 
 def sanitize_filename(name: str) -> str:
-    """Remove characters that are unsafe for filesystem names."""
+    """Remove unsafe characters and keep the name within filesystem limits.
+
+    Limits are applied in *bytes* (UTF-8), because Linux/macOS cap a filename at
+    255 bytes and CJK characters are 3 bytes each. A 200-character CJK name is
+    600 bytes and would raise OSError [Errno 36]. We truncate on a punctuation
+    boundary when possible so the result stays readable.
+    """
     name = name.strip()
     name = re.sub(r'[\\/:*?"<>|]', "_", name)
     name = re.sub(r"\s+", " ", name)
-    max_len = 200
-    if len(name) > max_len:
-        stem, ext = os.path.splitext(name)
-        name = stem[: max_len - len(ext)] + ext
+    # Collapse a title that swallowed body/description text into its first sentence.
+    name = re.split(r"[。！？!?]\s*", name, maxsplit=1)[0].strip() or name
+
+    max_bytes = 200  # leave headroom under the 255-byte filesystem limit
+    encoded = name.encode("utf-8")
+    if len(encoded) > max_bytes:
+        truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+        # Prefer cutting at the last separator for readability.
+        cut = max(truncated.rfind(sep) for sep in (" ", "，", "：", "、", "-", "_"))
+        if cut > max_bytes // 2:
+            truncated = truncated[:cut]
+        name = truncated.strip()
+
     return name
 
 
@@ -81,14 +96,19 @@ def fetch_page_with_playwright(url: str) -> str | None:
     print("Launching headless browser (this may take a few seconds)...")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        # NOTE: do NOT override user_agent here. Toutiao serves a different
+        # syntax-highlighting build for the custom mobile UA; that build puts
+        # every code line inline, so <pre> collapses to one line and code
+        # formatting is lost. The default Chromium UA gets the per-line markup.
         context = browser.new_context(
-            user_agent=HEADERS["User-Agent"],
             locale="zh-CN",
-            # Block unnecessary resources to speed up loading
         )
         page = context.new_page()
 
-        # Block images + fonts during initial load for speed (we download images separately)
+        # Block images and fonts during initial load for speed (we download
+        # images separately). Do NOT block CSS: Toutiao's syntax highlighting
+        # relies on stylesheet rules to put each code line on its own row, and
+        # without them every <pre> collapses into a single line.
         page.route(
             re.compile(r"\.(png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot)(\?.*)?$"),
             lambda route: route.abort(),
@@ -117,7 +137,17 @@ def fetch_page_with_playwright(url: str) -> str | None:
             time.sleep(5)
 
             html_text = page.content()
-            return html_text
+
+            # Toutiao renders code lines as display:block <span>s, so newlines
+            # exist only in the CSS layout, NOT in the static HTML. inner_text()
+            # respects layout and recovers the real line breaks; index them so
+            # the converter can emit line-accurate code blocks.
+            try:
+                code_texts = [el.inner_text() for el in page.query_selector_all("pre")]
+            except Exception:
+                code_texts = []
+
+            return html_text, code_texts
         except Exception as e:
             print(f"Playwright page load error: {e}")
             return None
@@ -339,11 +369,30 @@ def extract_author_info(soup: BeautifulSoup, url: str) -> dict:
 # ---------------------------------------------------------------------------
 # HTML → Markdown conversion
 # ---------------------------------------------------------------------------
-def html_to_markdown(content_els: list[Tag], base_url: str, image_dir: Path) -> tuple[str, set[str]]:
+# Browser-rendered <pre> texts (set per scrape run). Toutiao's code blocks only
+# get their line breaks from CSS layout, so page.inner_text() is the only
+# reliable source; the static HTML collapses everything onto one line.
+_rendered_code_texts: list[str] = []
+_rendered_code_index: list[int] = [0]
+
+
+def html_to_markdown(
+    content_els: list[Tag],
+    base_url: str,
+    image_dir: Path,
+    rendered_code_texts: list[str] | None = None,
+) -> tuple[str, set[str]]:
     """Convert HTML elements to Markdown, downloading images to `image_dir`.
+
+    `rendered_code_texts` holds each <pre>'s browser inner_text(), in document
+    order, so code blocks keep their real line breaks.
 
     Returns (markdown_text, set_of_downloaded_image_urls).
     """
+    global _rendered_code_texts, _rendered_code_index
+    _rendered_code_texts = rendered_code_texts or []
+    _rendered_code_index = [0]
+
     md_lines: list[str] = []
     seen_images: dict[str, str] = {}
 
@@ -361,6 +410,7 @@ def _convert_element(
     seen_images: dict[str, str],
 ):
     """Recursively convert an HTML element to Markdown lines."""
+    global _rendered_code_index
     if _should_skip(el):
         return
 
@@ -370,7 +420,9 @@ def _convert_element(
         img_url, alt = _extract_image_url(el, base_url)
         if img_url:
             local_path = _download_image(img_url, image_dir, seen_images)
-            md_lines.append(f"![{alt}]({local_path})")
+            # Alt text = the downloaded image's own filename stem.
+            label = Path(local_path).stem if local_path else alt
+            md_lines.append(f"![{label}]({local_path})")
         return
 
     if tag_name in ("h1", "h2", "h3", "h4", "h5", "h6"):
@@ -403,9 +455,29 @@ def _convert_element(
         return
 
     if tag_name == "pre":
-        code = _get_clean_text(el)
+        # Prefer the browser-rendered text (real line breaks from CSS layout);
+        # the static HTML has no <br>/newlines inside <pre>.
+        code = None
+        if _rendered_code_texts is not None and _rendered_code_index[0] < len(_rendered_code_texts):
+            candidate = _rendered_code_texts[_rendered_code_index[0]]
+            if candidate and candidate.strip():
+                code = candidate
+            _rendered_code_index[0] += 1
+        if not code:
+            code = _get_clean_text(el)
         if code:
-            md_lines.append(f"```\n{code}\n```")
+            lang = ""
+            code_el = el.find("code")
+            if code_el:
+                for cls in (code_el.get("class") or []):
+                    if cls.startswith("hljs-") or cls == "hljs":
+                        continue
+                    if cls in ("hljs",):
+                        continue
+                    lang = cls
+                    break
+            code = code.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+            md_lines.append(f"```{lang}\n{code}\n```")
         return
 
     if tag_name == "figure":
@@ -699,10 +771,13 @@ def scrape(url: str, output_dir: str = ".", use_playwright: bool = True) -> str:
     print(f"Fetching: {url}")
 
     html_text = None
+    code_texts: list[str] = []
 
     # Strategy 1: Playwright (headless browser, renders JavaScript)
     if use_playwright:
-        html_text = fetch_page_with_playwright(url)
+        result = fetch_page_with_playwright(url)
+        if result:
+            html_text, code_texts = result
 
     # Strategy 2: Plain HTTP request (no JS rendering)
     if not html_text:
@@ -762,7 +837,7 @@ def scrape(url: str, output_dir: str = ".", use_playwright: bool = True) -> str:
     author_info = extract_author_info(soup, url)
 
     # --- Convert to Markdown ---
-    md_body, content_img_urls = html_to_markdown(content_els, url, image_dir)
+    md_body, content_img_urls = html_to_markdown(content_els, url, image_dir, code_texts)
 
     # --- Collect images outside content container ---
     # Toutiao places article images in a separate flow container.
@@ -773,7 +848,8 @@ def scrape(url: str, output_dir: str = ".", use_playwright: bool = True) -> str:
         md_body += "\n\n"
         for img_url, img_alt in external_imgs:
             local_path = _download_image(img_url, image_dir, seen_for_external)
-            md_body += f"\n![{img_alt}]({local_path})\n"
+            label = Path(local_path).stem if local_path else img_alt
+            md_body += f"\n![{label}]({local_path})\n"
 
     # --- Build final Markdown ---
     md_parts = [f"# {title}\n"]

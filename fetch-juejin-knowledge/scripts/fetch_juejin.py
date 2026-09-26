@@ -22,8 +22,11 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
+from html import unescape
+from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 
@@ -122,6 +125,51 @@ def extract_column_id_from_url(url):
 # Markdown 生成
 # ============================================================
 
+def _is_html(text):
+    """粗略判断一段文本是否为 HTML（jué金 content 字段可能是 HTML）。"""
+    if not text:
+        return False
+    return bool(re.search(r"</?(p|div|h[1-6]|figure|img|blockquote|ul|ol|li|pre|code|strong|a)\b", text, re.I))
+
+
+def _html_to_md(html):
+    """用 fetch-wx-knowledge 的 html_to_md.py 把 HTML 片段转为 Markdown。
+
+    失败则回退为原始的简单去标签，保证不会因下游脚本缺失而中断采集。
+    """
+    converter = Path(__file__).resolve().parents[2] / "fetch-wx-knowledge" / "scripts" / "html_to_md.py"
+    if converter.exists():
+        with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as fh:
+            fh.write(html)
+            tmp_in = fh.name
+        tmp_out = tmp_in + ".md"
+        try:
+            p = subprocess.run(
+                [sys.executable, str(converter), "--input", tmp_in,
+                 "--output", tmp_out, "--title", "_",
+                 "--base-url", "https://juejin.cn",
+                 "--source-url", "https://juejin.cn"],
+                capture_output=True, text=True)
+            if p.returncode == 0 and os.path.exists(tmp_out):
+                md = Path(tmp_out).read_text(encoding="utf-8")
+                # 去掉转换器加的标题/原文链接头部，只留正文
+                md = re.sub(r"^#\s*_\s*\n", "", md)
+                md = re.sub(r"^>\s*原文链接：.*$\n?", "", md, flags=re.M)
+                return md.strip()
+        finally:
+            for p_ in (tmp_in, tmp_out):
+                try:
+                    os.remove(p_)
+                except OSError:
+                    pass
+    # 回退：直接去标签
+    text = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
+    text = re.sub(r"</(p|div|h[1-6]|li|blockquote|figure)>\s*", "\n\n", text, flags=re.I)
+    text = re.sub(r"<img[^>]*src=\"([^\"]+)\"[^>]*>", r"\n\n![]\1)\n\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return unescape(text).strip()
+
+
 def build_markdown(article_data, source_url):
     """从 API 返回数据组装 Markdown 内容"""
     detail = article_data['data']
@@ -129,7 +177,14 @@ def build_markdown(article_data, source_url):
     author = detail.get('author_user_info', {})
 
     title = info.get('title', '无标题')
-    mark_content = info.get('mark_content', '') or info.get('brief_content', '') or ''
+    # 正文字段优先级：content（全文字段，常为 HTML）> mark_content > brief_content（摘要）
+    # 实战踩坑：部分文章 mark_content 为空，旧逻辑会回退到 brief_content 摘要（仅百余字），
+    # 而真正的全文在 content 字段里（本次案例 140 字 vs 17109 字）。
+    raw = info.get('content', '') or info.get('mark_content', '') or info.get('brief_content', '') or ''
+    if _is_html(raw):
+        mark_content = _html_to_md(raw)
+    else:
+        mark_content = raw
     ctime = format_timestamp(info.get('ctime', '0'))
     tag_ids = info.get('tag_ids', [])
     tags = ', '.join(str(t) for t in tag_ids) if tag_ids else '无'
@@ -321,7 +376,17 @@ def cmd_article(args):
     data = get_article_detail(article_id)
 
     if data.get('err_no') != 0:
-        print(f"API 错误: [{data.get('err_no')}] {data.get('err_msg')}", file=sys.stderr)
+        err_no = data.get('err_no')
+        err_msg = data.get('err_msg')
+        print(f"API 错误: [{err_no}] {err_msg}", file=sys.stderr)
+        # 输出机器可读的失败原因，供上层编排器区分「文章不存在」与「采集超时」
+        if str(err_no) == "404" or "内容为空" in str(err_msg):
+            reason = "文章不存在或已删除（接口返回 404/内容为空）"
+        else:
+            reason = f"接口返回错误 [{err_no}] {err_msg}"
+        print(json.dumps({"ok": False, "reason": reason,
+                          "err_no": err_no, "err_msg": err_msg},
+                         ensure_ascii=False))
         sys.exit(1)
 
     source_url = f"https://juejin.cn/post/{article_id}"
